@@ -1,0 +1,1448 @@
+//  CODE WRITTEN BY PAVAN YASHWANT + VINAY DUTTA + RAUSHAN KUMAR
+//  WE HAVE PROVIDED ALL THE NECCESSARY COMMENTS SO THAT ANYONE GOING THROUGH THE CODE MIGHT NOT FACE 
+// ANY PROBLEM IN UNDERSTANDING WHAT WE HAVE DONE AND WHAT WE ARE TRYING TO DO.
+#include <Key.h>
+#include <Keypad.h>
+#include<LiquidCrystal.h>
+#include <stdio.h>
+//-------------------------------- pins input-output---------------------------------//
+
+//1                              //common for all//
+  const int led = 13;                   
+  const int buz = 12;               
+  const int led1=13;
+//2                             //sound sensor //                                           
+    #define AUDIO_IN_PIN A1                                             
+//3                             //photo sensor ///
+     int photoPin = A0;  
+
+//---------------------------varaible inisilisation-----------------------------//
+    int choices_delay =20;
+
+                                   ///keypad varaible///
+String code;
+int len = 0;
+char ch;
+char new_char;
+int unit_delay = 250;
+char key;  
+                                 //photo sensor variables//
+
+const char MorseTree[] = {'\0','E', 'T', 'I', 'A', 'N', 'M', 'S',
+                          'U', 'R', 'W', 'D', 'K', 'G', 'O', 'H',
+                          'V', 'F', 'U', 'L', 'A', 'P', 'J', 'B',
+                          'X', 'C', 'Y', 'Z', 'Q', '\0','\0','5',
+                          '4', '\0','3', '\0','\0','\0','2', '\0',
+                          '\0','+', '\0','\0','\0','\0','1', '6',
+                          '=', '/', '\0','\0','\0','(', '\0','7',
+                          '\0','\0','\0','8', '\0','9', '0', '\0',
+                          '\0','\0','\0','\0','\0','\0','\0','\0',
+                          '\0','\0','\0','?', '_', '\0','\0','\0',
+                          '\0','"', '\0','\0','.', '\0','\0','\0',
+                          '\0','@', '\0','\0','\0','\0','\0','\0',
+                          '-', '\0','\0','\0','\0','\0','\0','\0',
+                          '\0',';', '!', '\0',')', '\0','\0','\0',
+                          '\0','\0',',', '\0','\0','\0','\0',':',
+                          '\0','\0','\0','\0','\0','\0','\0'
+                         };
+    
+    int val = 0; // A Variable to Store the Light Value from the LDR
+int ctrHigh = 0;
+int ctrLow = 0;
+int codePtr = 0;
+int dotLen = 550; // dot length
+
+//3                              //sound sensor variables//
+// Sampling rate in samples/s
+#define SAMPLING_RATE 5000
+
+// Length of one dot. Assumes constant WPM at the moment
+#define DOT_LEN 1
+
+#define THRESHOLD 200
+
+// Precalculated coefficient for our goertzel filter.
+float goetzelCoeff=0;
+
+// Length of the goertzel filter
+#define GOERTZEL_N 128
+
+// The samples taken from the A/D. The A/D results are
+// 10-bits.
+int sampledData[GOERTZEL_N];
+
+enum statuses
+{
+    none =0,
+    dot,
+    dash,
+    intersymbol,
+    interchar,
+    interword
+};
+
+statuses currentStatus=none;
+
+int statusCounter=0;
+
+char* lookupString = ".EISH54V.3UF....2ARL.....WP..J.1TNDB6.X..KC..Y..MGZ7.Q..O.8..90.";
+byte currentDecoderIndex = 0;
+byte currentDashJump = 64;
+char currentAssumedChar='\0';
+
+//--------------------------- lcd and keypad setup-----------------------------   
+                                  //KEYPAD SETUP//
+ const int ROW_NUM = 4; //four rows
+ const int COLUMN_NUM = 4; //three columns
+
+ char keys[ROW_NUM][COLUMN_NUM] = {
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
+ };
+
+ byte pin_rows[ROW_NUM] = {9,8,7,6}; 
+ byte pin_column[COLUMN_NUM] = {5,4,3,2}; 
+ Keypad keypad = Keypad( makeKeymap(keys), pin_rows, pin_column, ROW_NUM, COLUMN_NUM );
+
+   String str; // store string from keypad
+
+                                //LCD SETUP//
+ LiquidCrystal lcd(10,11,A2,A3,A4,A5);
+            
+//-----------------------------SETUP FUN--------------------------------------//
+void setup(){
+
+  Serial.begin(9600);
+  pinMode(led, OUTPUT);
+  pinMode(buz, OUTPUT);
+  pinMode(led1,OUTPUT);
+    delay(5);
+
+  Serial.println("I am ready...\n");
+  lcd.setCursor(0, 1);
+   lcd.print("I am ready...");
+   
+   delay(2000);
+   lcd.clear();
+   security();
+    choice(); 
+  str.reserve(32); // maximum input characters is 33
+}
+//--------------------------------FUNCTIONS------------------------------------//
+
+                     //--------sound sensor-------------//
+void voltile(){
+  // Set ADC prescaler to 16
+  _SFR_BYTE(ADCSRA) |=  _BV(ADPS2); // Set ADPS2
+  _SFR_BYTE(ADCSRA) &= ~_BV(ADPS1); // Clear ADPS1
+  _SFR_BYTE(ADCSRA) &= ~_BV(ADPS0); // Clear ADPS0
+
+ float omega = (2.0 * PI * 700) / SAMPLING_RATE;
+  goetzelCoeff = 2.0 * cos(omega);
+}
+char lookup(char currentMark)
+{
+    currentDashJump = floor(currentDashJump / 2.0f);
+    if (currentMark == '.')
+    {                
+        currentDecoderIndex++;
+    }
+    else if (currentMark == '-')
+    {
+        currentDecoderIndex += currentDashJump;
+    }
+    else if (currentMark == '\0')
+    {
+        currentDecoderIndex = 0;
+        currentDashJump = 64;
+        return '\0';
+    }
+    return lookupString[currentDecoderIndex];
+}
+                   //---------CHOICE FUNCTIONS----------//
+    void choice()
+ {
+      key=NULL;
+    lcd.clear();
+      Serial.println ("enter your choice \n keypad=1 , \n buzzer =2 , \n sound sensor =4, \n  light 3 , \n exit-> 0");
+     char text[]="exit=0,keypad=1,buzzer=2,light=3,nsound=4";
+  
+    while(1)
+    {
+      int j=0;
+      
+       if(key=='0'||key=='1'|| key=='2'||key=='3'||key=='4')
+       {
+         break;
+       }
+
+      unsigned int i = 0;
+      // set the cursor to (0,0):
+     lcd.setCursor (2, 0);
+     lcd.print ("enter choice");
+     lcd.setCursor (0, 1);
+
+      while (text[i] != '\0')
+      {
+         lcd.print(text[i]);
+
+         if (i >= 16)
+         {
+          lcd.command (0x18); //Scrolling text to Right
+         }
+         delay (200);
+         i++;
+      }
+     
+     // clear screen for the next loop:
+      lcd.clear();
+     while(j<400)
+      {
+      key =keypad.getKey();
+       if(key)
+       {
+         lcd.print('.');
+         break;
+         lcd.clear();  
+       }
+        delay(5);
+        j++;
+      }
+    }  
+    Serial.print("your choise"); 
+    lcd.print ("your choice"); 
+    lcd.print(key);
+    Serial.print(key);
+    delay(2000);
+    lcd.clear();
+    return;
+  
+}
+
+               //dot dash with all characters for convert sentance to morse
+  void dot1()
+   {
+  Serial.print(".");
+  lcd.print(".");  //***lcd 
+  digitalWrite(led, HIGH);
+  digitalWrite(buz, HIGH);
+  delay(unit_delay);
+  digitalWrite(led, LOW);
+  digitalWrite(buz, LOW);
+  delay(unit_delay);
+ }
+
+ void dash1()
+ {
+  Serial.print("-");
+  lcd.print("-");// ***lcd
+  digitalWrite(led, HIGH);
+  digitalWrite(buz, HIGH);
+  delay(unit_delay * 3);
+  digitalWrite(led, LOW);
+  digitalWrite(buz, LOW);
+  delay(unit_delay);
+ }
+
+ void A()
+ {
+  Serial.print('A');
+  lcd.print('A');
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void B()
+ {
+  Serial.print('B');
+  lcd.print('B');
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void C()
+ {
+  Serial.print('C');
+  lcd.print('C');
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void D()
+  {
+  Serial.print('D');
+  lcd.print('D');
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+  }
+ void E()
+ {
+  Serial.print('E');
+  lcd.print('E');
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void f()
+  {
+  Serial.print('F');
+  lcd.print('F');
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void G()
+ {
+  Serial.print('G');
+  lcd.print('G');
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void H()
+ {
+  Serial.print('H');
+  lcd.print('H');
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void I()
+ {
+  Serial.print('I');
+  lcd.print('I');
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void J()
+ {
+  Serial.print('J');
+  lcd.print('J');
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+  void K()
+ {
+  Serial.print('K');
+  lcd.print('K');
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+  }
+ void L()
+ {
+  Serial.print('L');
+  lcd.print('L');
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void M()
+ {
+  Serial.print('M');
+  lcd.print('M');
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void N()
+ {
+  Serial.print('N');
+  lcd.print('N');
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void O()
+ {
+  Serial.print('O');
+  lcd.print('O');
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void P()
+ {
+  Serial.print('P');
+  lcd.print('P');
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dot1();
+  lcd.clear();
+  }
+ void Q()
+ {
+  Serial.print('Q');
+  lcd.print('Q');
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void R()
+ {
+  Serial.print('R');
+  lcd.print('R');
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+  }
+ void S()
+ {
+  Serial.print('S');
+  lcd.print('S');
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void T()
+ {
+ Serial.print('T');
+ lcd.print('T');
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void U()
+ {
+  Serial.print('U');
+  lcd.print('U');
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void V()
+ {
+  Serial.print('V');
+  lcd.print('V');
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void W()
+ {
+  Serial.print('W');
+  lcd.print('W');
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void X()
+ {
+  Serial.print('X');
+  lcd.print('X');
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void Y()
+ {
+  Serial.print('Y');
+  lcd.print('Y');
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void Z()
+ {
+  Serial.print('Z');
+  lcd.print('Z');
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+  void one()
+ {
+  Serial.print('1');
+  lcd.print('1');
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void two()
+  {
+  Serial.print('2');
+  lcd.print('2');
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void three()
+ {
+  Serial.print('3');
+  lcd.print('3');
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void four()
+ {
+  Serial.print('4');
+  lcd.print('4');
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void five()
+  {
+  Serial.print('5');
+  lcd.print('5');
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void six()
+ {
+  Serial.print('6');
+  lcd.print('6');
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void seven()
+ {
+  Serial.print('7');
+  lcd.print('7');
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void eight()
+  {
+  Serial.print('8');
+  lcd.print('8');
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void nine()
+ {
+  Serial.print('9');
+  lcd.print('9');
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dot1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+ void zero()
+ {
+  Serial.print('0');
+  lcd.print('0');
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  dash1();
+  delay(unit_delay);
+  lcd.clear();
+ }
+//2
+ void morse()
+ {
+  if (ch =='A'||ch =='a')
+  {
+    A();
+    
+  }
+  else if (ch =='B'||ch =='b')
+  {
+    B();
+   
+  }
+  else if (ch =='C'||ch =='c')
+  {
+    C();
+  
+  }
+  else if (ch =='D'||ch =='d')
+  {
+    D();
+    
+  }
+  else if (ch =='E'||ch =='e')
+  {
+    E();
+   
+  }
+  else if (ch =='F'||ch =='f')
+  {
+    f();
+   
+    
+  }
+  else if (ch =='G'||ch =='g')
+  {
+    G();
+   
+  }
+  else if (ch =='H'||ch =='h')
+  {
+    H();
+    
+  }
+  else if (ch =='I'||ch =='i')
+  {
+    I();
+  
+  }
+  else if (ch =='J'||ch =='j')
+  {
+    J();
+  
+  }
+  else if (ch =='K'||ch =='k')
+  {
+    K();
+   
+  }
+  else if (ch =='L'||ch =='l')
+  {
+    L();
+    
+  }
+  else if (ch =='M'||ch =='m')
+  {
+    M();
+ 
+  }
+  else if (ch =='N'||ch =='n')
+  {
+    N();
+ 
+  }
+  else if (ch =='O'||ch =='o')
+  {
+    O();
+  
+  }
+  else if (ch =='P'||ch =='p')
+  {
+    P();
+   
+  }
+  else if (ch =='Q'||ch =='q')
+  {
+    Q();
+   
+  }
+  else if (ch =='R'||ch =='r')
+  {
+    R();
+   
+  }
+  else if (ch =='S'||ch =='s')
+  {
+    S();
+   
+  }
+  else if (ch =='T'||ch =='t')
+  {
+    T();
+ 
+  }
+  else if (ch =='U'||ch =='u')
+  {
+    U();
+    
+  }
+  else if (ch =='V'||ch =='v')
+  {
+    V();
+     
+  }
+  else if (ch =='W'||ch =='w')
+  {
+    W();
+    
+  }
+  else if (ch =='X'||ch =='x')
+  {
+    X();
+     
+  }
+  else if (ch =='Y'||ch =='y')
+  {
+    Y();
+  }
+  else if (ch =='Z'||ch =='z')
+  {
+    Z();
+   
+  }
+  else if (ch == '0')
+  {
+    zero();
+   
+  }
+  else if (ch =='1')
+  {
+    one();
+    
+  }
+  else if (ch == '2')
+  {
+    two();
+     
+  }
+  else if (ch =='3')
+  {
+    three();
+    
+  }
+  else if (ch == '4')
+  {
+    four();
+   
+  }
+  else if (ch == '5')
+  {
+    five();
+   
+  }
+  else if (ch == '6')
+  {
+    six();
+    
+  }
+  else if (ch == '7')
+  {
+    seven();
+    
+  }
+  else if (ch == '8')
+  {
+    eight();
+  }
+  else if (ch == '9')
+  {
+    nine();
+   
+  }
+  else if (ch ==' ')
+  {
+    delay(unit_delay * 7);
+    Serial.print("  ");
+  }
+  else
+  {
+    Serial.println(".");
+  }
+ }
+//3
+void String2Morse()
+{
+    while(code[len]!='\0')
+    {
+        ch =code[len];
+        morse();
+        len++;
+    }
+  len=0;
+}                               
+//-------- KEYPAD FUNCTIONS(by this we change keypad viewe in mobile)------------
+char printSentence()
+{
+    // Store the mobile keypad mappings
+ char nums[][5]
+        = { "", "", "ABC2", "DEF3", "GHI4",
+            "JKL5", "MNO6", "PQRS7", "TUV8",
+            "WXYZ9" };
+  
+    // Traverse the string str
+    int i = 0;
+    while (str[i] != '\0') {
+ 
+        // If the current character is
+        // '.', then continue to the
+        // next iteration
+        if (str[i] == '*') {
+            i++;
+            continue;
+        }
+
+        if(str[i]== '1')
+        {
+          
+          }
+        // Stores the number of
+        // continuous clicks
+        int count = 0;
+ 
+        // Iterate a loop to find the
+        // count of same characters
+        while (str[i + 1]
+               && str[i] == str[i + 1]) {
+ 
+            // 2, 3, 4, 5, 6 and 8 keys will
+            // have maximum of 3 letters
+            if (count == 3
+                && ((str[i] >= '2'
+                     && str[i] <= '6')
+                    || (str[i] == '8')))
+                break;
+ 
+            // 7 and 9 keys will have
+            // maximum of 4 keys
+            else if (count == 4
+                     && (str[i] == '7'
+                         || str[i] == '9'))
+                break;
+            count++;
+            i++;
+ 
+            // Handle the end condition
+            if (str[i] == '\0')
+                break;
+        }
+ 
+        // Check if the current pressed
+        // key is 7 or 9
+        if (str[i] == '7' || str[i] == '9') {
+            return nums[str[i] - 48][count % 5];
+        }
+ 
+        // Else, the key pressed is
+        // either 2, 3, 4, 5, 6 or 8
+        else {
+            return nums[str[i] - 48][count % 4];
+        }
+        i++;
+    }
+}
+
+//------------------------------password--------------------------------
+ int counter = 0; 
+ int attempts = 0; 
+ int max_attempts = 3; 
+ String password = "1234";
+ String mypassword;
+
+ void security()
+ { lcd.print("Password Please!");
+   delay(2000);
+   lcd.clear();
+  while(true)   
+  {char passkey = keypad.getKey();
+     if(passkey)
+     { 
+      Serial.println(passkey);
+      counter = counter + 1;
+      lcd.setCursor(counter ,1);
+      lcd.print("*");
+    }
+     if( passkey == '1')
+    {
+      mypassword = mypassword + 1;
+    }
+
+    if (passkey == '2')
+    {
+     mypassword = mypassword + 2;  
+    }
+  
+    if (passkey == '3')
+    {
+ 
+      mypassword = mypassword + 3; 
+    }
+   
+    if (passkey == '4')
+    {
+   
+     mypassword = mypassword + 4;  
+    }
+  
+    if (passkey == '5')
+    {
+  
+     mypassword = mypassword + 5;
+    }
+  
+    if (passkey == '6')
+    {
+   
+    mypassword = mypassword + 6; 
+    }
+  
+    if (passkey == '7')
+    {
+ 
+     mypassword = mypassword + 7; 
+    }
+ 
+    if (passkey == '8')
+    {
+ 
+     mypassword = mypassword + 8; 
+    }
+  
+    if (passkey == '9')
+    {
+ 
+     mypassword = mypassword + 9;
+    }
+             
+   if (passkey == '0')
+    {
+ 
+     mypassword = mypassword + 0; 
+    }
+  
+  
+    if (passkey == '*')
+    {
+     Serial.println(mypassword); 
+     if ( password == mypassword )
+     {
+        lcd.clear(); 
+        lcd.println("Access granted");
+        lcd.setCursor(0,1);
+        //digitalWrite(lock, HIGH);
+       delay(2000); 
+       //digitalWrite(lock,LOW);
+       mypassword = ""; 
+       counter = 0; 
+       lcd.clear();
+     return;
+       }
+       else
+      {
+       Serial.println("wrong");
+       lcd.print("Access denied");
+        attempts = attempts + 1; 
+      if (attempts >= max_attempts )
+      {
+       lcd.clear();
+       lcd.setCursor(0,0); 
+       delay(2000); 
+       attempts = 0; 
+ 
+      }
+     mypassword = ""; 
+     counter = 0; 
+     lcd.clear(); 
+     lcd.setCursor(0,0); 
+      lcd.print("Wrong Password");
+     delay(1000);
+ 
+     lcd.setCursor(0,1); 
+     lcd.print("max attempts 3");
+      delay(1000);
+ 
+     lcd.clear(); 
+      lcd.println("Enter password");
+      delay(2000);
+      lcd.clear();
+     lcd.setCursor(0,1); 
+     }
+    }
+  }
+ }
+
+//--------------------------- QUEUE Implement -------------------------------------//
+                         
+     #define MAX 16
+     int queue[MAX];
+     String  Pstore="";
+     int rear = 0;
+     int front = 0; 
+     char st;
+     void queueEnqueue(char add_item)
+     {
+        if (MAX == rear) {
+            return;
+        }
+        else {
+            queue[rear] = add_item;
+            rear++;
+        }
+        return;
+     }
+     void queueDequeue()
+     {
+        if (front == rear) {
+            return;
+        }
+        else {
+            for (int i = 0; i < rear - 1; i++) {
+                queue[i] = queue[i + 1];
+            }
+            rear--;
+        }
+        return;
+     }
+     void queueDisplay()
+     {
+        int i;
+        if (front == rear) {
+            return;
+        }
+        for (i = front; i < rear; i++) {
+             st=queue[i];
+             Pstore+=st;
+        }
+        return;
+     }
+     void LPrint(char add_item)
+     {   
+     Pstore="";
+     lcd.clear();
+     if (rear ==MAX)
+     {
+        queueDequeue();
+     }
+     queueEnqueue(add_item);
+     queueDisplay();
+     lcd.print(Pstore);
+     }
+//8888888888888888888888888888888888888888888888888888888888888888888888888888888888888888
+                                 //LOOP FUNCTIONS
+//8888888888888888888888888888888888888888888888888888888888888888888888888888888888888888
+
+void loop ()
+{   
+if(key)
+{
+  switch (key)
+  {                             
+ //-------------------------------- keypad input ----------------------------------------//
+    case '1':
+      {Serial.print("enter your code\n");
+      lcd.clear();
+      lcd.print("enter your code"); 
+      lcd.blink();
+      delay(2000);
+      lcd.noBlink();
+      lcd.clear();
+      while (1)  
+      {
+         
+          key = keypad.getKey ();
+         if (key)
+        {
+
+          Serial.println (key);
+          lcd.print(key);
+          if (key == '*')
+          {
+           lcd.clear();
+           code+=printSentence();
+           Serial.print(printSentence());
+           lcd.print(code);
+           delay(1000);
+           lcd.clear();
+           str= ""; 
+          }
+
+          else if (key == '#')
+         { lcd.clear();
+           Serial.print("end 1 program\n"); 
+            lcd.print("Program '1' ends"); 
+            delay(2000);
+            choice();
+           str = "";
+         break;
+         }
+         
+         else
+         {
+         str += key; // append new character to str string
+         key=NULL;
+         }
+         }
+
+      }
+   break; }
+ //-------------------- print morse code\(which taken from keypad) --------------------// 
+  case '2':
+        { lcd.clear();
+        String2Morse();
+        code=""; // clearcode
+        Serial.print("\nProgram 2 ends\n");
+        lcd.print("Program 2 ends");
+        delay(2000);
+        lcd.clear();
+         choice();
+    break;}
+ //--------------------------------- photo sensor input ---------------------------//
+     case '3':
+     {
+         for(int k=0;k<16;k++)
+     {  
+     queueDequeue();
+     }
+     lcd.clear();
+     lcd.print("Turn on flash");
+     Serial.println("\nturn flash\n");
+     lcd.blink();
+     delay(2000);
+     lcd.noBlink();
+     lcd.clear();
+     while(1)
+     {
+         key = keypad.getKey ();
+       if (key== '#') // breaking condition 
+       {
+            Serial.print("\nprogram 3 end\n");
+            lcd.print("program 3 ends");
+            delay(200);
+            choice();
+           break;
+       } 
+
+         val = analogRead(0);
+       if (val >= 500)
+         {
+         ctrHigh++;
+         ctrLow = 0;
+         digitalWrite(13, HIGH);
+         tone(9, 1000);
+         }
+        else 
+        {
+            ctrLow++;
+            if ((ctrHigh >= dotLen) && (ctrHigh < dotLen*2)) {
+             Serial.print(".");
+             LPrint('.');
+             codePtr = (2*codePtr) + 1;
+            } 
+            else if (ctrHigh >= dotLen * 2) 
+            {
+              Serial.print("-");
+              LPrint('-');
+              codePtr = (2*codePtr) + 2;
+            } 
+           else
+           {
+              if(ctrLow == dotLen*2){
+             Serial.print(MorseTree[codePtr]);
+             LPrint(MorseTree[codePtr]);
+             codePtr = 0;
+              }
+           }
+          ctrHigh = 0;
+          digitalWrite(13, LOW);
+          noTone(9); 
+        }
+      }
+                    
+    break;}
+ //-----------------------------------sound sensor----------------------------------//
+  case '4':
+     {
+     for(int k=0;k<16;k++){
+     queueDequeue();}
+     lcd.clear();
+     lcd.print("Detecting Audio");
+     
+     Serial.print("\nturn on sound\n");
+     lcd.blink();
+     delay(5000);
+     lcd.noBlink();
+     lcd.clear();
+       voltile();
+     while (1)
+     {
+      key = keypad.getKey ();
+     if (key== '#') /// breaking condition 
+       {
+            Serial.print("\nprogram 4 end\n");
+            lcd.clear();
+            lcd.print("program 4 ends");
+            delay(1000);
+            Serial.println("enteryourchoice\nkeypad=1\nbuzzer=2\nsoundsensor=3\nlight4\nnewsound sensor -> 5");
+            choice();
+           break;
+       } 
+
+     // Sample at 4KHz 
+     int32_t dcOffset = 0;
+     for (int ix = 0; ix < GOERTZEL_N; ix++)
+      {
+       sampledData[ix] = analogRead (AUDIO_IN_PIN); // 17uS
+       delayMicroseconds (233); // total 250uS -> 4KHz
+       dcOffset += sampledData[ix];
+      }
+      dcOffset = dcOffset / GOERTZEL_N;
+
+      // Remove DC offset (center signal around zero).
+      // Calculate RMS signal level.
+      int32_t rmsLevel = 0;
+      for (int ix = 0; ix < GOERTZEL_N; ix++)
+      {
+     sampledData[ix] -= dcOffset;
+      rmsLevel += abs (sampledData[ix]);
+      }
+     rmsLevel = rmsLevel / GOERTZEL_N;
+
+     // AGC scale to have RMS at about 100
+      for (int ix = 0; ix < GOERTZEL_N; ix++)
+     {
+     if (rmsLevel > 5)
+     {
+      sampledData[ix] = sampledData[ix] * (100.0f / rmsLevel);
+     }
+      else
+     {
+      sampledData[ix] = 0;
+     }
+     }
+
+     // Apply goertzel filter and get amplitude of  
+     float Q2 = 0;
+     float Q1 = 0;
+     for (int ix = 0; ix < GOERTZEL_N; ix++)
+      {
+      float Q0 = goetzelCoeff * Q1 - Q2 + (float) (sampledData[ix]);
+      Q2 = Q1;
+      Q1 = Q0;
+      }
+
+     int magnitude = sqrt (Q1 * Q1 + Q2 * Q2 - goetzelCoeff * Q1 * Q2);
+     if (currentStatus == none && magnitude > THRESHOLD)
+      {
+      currentStatus = dot;
+      statusCounter = 0;
+      }
+     else if (currentStatus == dot && magnitude > THRESHOLD && statusCounter > DOT_LEN * 2)
+      {
+      currentStatus = dash;
+      }
+     else if (currentStatus == intersymbol && magnitude < THRESHOLD && statusCounter > DOT_LEN * 3)
+      {
+     currentStatus = interchar;
+      }
+     else if (currentStatus == interchar && magnitude < THRESHOLD && statusCounter > DOT_LEN * 8)
+      {
+       currentStatus = interword;
+      }
+     else if (currentStatus != none && currentStatus < intersymbol && magnitude < THRESHOLD)
+      {
+  
+       currentAssumedChar = lookup ((currentStatus == dot) ? '.' : '-');
+        currentStatus = intersymbol;
+       statusCounter = 0;
+      }
+     else if (currentStatus > dash && (magnitude > THRESHOLD || currentStatus == interword))
+      {
+       
+       if (currentStatus == interchar)
+       {
+         Serial.print (currentAssumedChar);
+         LPrint(currentAssumedChar);
+        lookup ('\0');
+       }
+       else if (currentStatus == interword)
+       {
+         Serial.print (currentAssumedChar);
+         Serial.print (" ");
+         LPrint(currentAssumedChar);
+         LPrint(' '); 
+        lookup ('\0');
+       }
+       currentStatus = none;
+      }
+     statusCounter++;
+    }
+  
+  break;}
+ //-------------------------program end (password)---------------------------------//
+ case '0':
+         {lcd.print("*EXIT*");
+          delay(1000);
+         lcd.clear();
+         security();
+         choice();
+      }
+        break;  
+  }
+ }
+}
